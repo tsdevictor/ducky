@@ -35,6 +35,12 @@ import { getRecentCommits, getGitConfig } from '../trackers/gitTracker.js';
 import { sampleShellHistory } from '../trackers/historyTracker.js';
 import { scanArtifacts } from '../trackers/artifactTracker.js';
 import { checkDNSCache, sampleNetworkConnections } from '../trackers/networkTracker.js';
+import {
+  scanCursorChatHistory,
+  scanClaudeCodeLogs,
+  scanVSCodeCopilotLogs,
+  checkInstalledAIApps,
+} from '../trackers/editorTracker.js';
 
 // ── Session state ────────────────────────────────────────────────────────────
 const startTime = new Date().toISOString();
@@ -51,6 +57,7 @@ const data = {
   fileEvents: [],
   networkSnapshots: [],
   dnsFindings: {},
+  editorContext: {},
 };
 
 // ── File tracker ─────────────────────────────────────────────────────────────
@@ -83,6 +90,12 @@ data.installedTools = getInstalledAITools();
 data.aiArtifacts = scanArtifacts(projectDir);
 data.gitConfig = getGitConfig(projectDir);
 data.dnsFindings = checkDNSCache();
+data.editorContext = {
+  cursorChatHistory: scanCursorChatHistory(),
+  claudeCodeLogs: scanClaudeCodeLogs(),
+  vscodeCopilotLogs: scanVSCodeCopilotLogs(),
+  installedAIApps: checkInstalledAIApps(),
+};
 
 // ── Polling intervals ────────────────────────────────────────────────────────
 const intervals = [];

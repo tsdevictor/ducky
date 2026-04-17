@@ -29,6 +29,7 @@ export function buildReport(session, rawData, endTime) {
   const envContext = {
     installedTools: rawData.installedTools || {},
     gitConfig: rawData.gitConfig || {},
+    editorContext: rawData.editorContext || {},
   };
 
   const signals = computeSignals({
@@ -332,6 +333,7 @@ function emptyTracking() {
     gitActivity: { totalCommits: 0, likelyAICommits: 0, commits: [] },
     shellHistory: { aiCommandsFound: [], commandCountByTool: {}, uniqueToolsInvoked: [] },
     aiArtifacts: { found: {}, toolsFromArtifacts: [] },
+    networkActivity: { aiDomainsResolved: {}, activeConnectionSnapshots: [], toolsViaNetwork: [] },
     envContext: { installedTools: {}, gitConfig: {} },
     signals: { aiUsageScore: 0, primaryTool: null, confidence: 'none', evidence: [] },
   };
