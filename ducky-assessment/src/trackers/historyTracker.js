@@ -5,9 +5,9 @@ import { homedir } from 'os';
 const AI_TOOL_PATTERNS = [
   { regex: /\bclaude\b/i, tool: 'Claude Code' },
   { regex: /\baider\b/i, tool: 'Aider' },
-  { regex: /\bcursor\b/i, tool: 'Cursor' },
+  { regex: /^cursor\s|^cursor$|\bcursor\s+(?:open|\.|\/)|\bopen\s+-a\s+cursor/i, tool: 'Cursor' },
   { regex: /\bcody\b/i, tool: 'Sourcegraph Cody' },
-  { regex: /\bcontinue\b/i, tool: 'Continue.dev' },
+  { regex: /continue\.dev|npx.*continue|@continue-dev/i, tool: 'Continue.dev' },
   { regex: /\bwindsurf\b/i, tool: 'Windsurf' },
   { regex: /openai/i, tool: 'OpenAI CLI' },
   { regex: /anthropic/i, tool: 'Anthropic CLI' },
