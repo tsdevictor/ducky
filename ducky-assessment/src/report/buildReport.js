@@ -1,5 +1,9 @@
+import { getRecentCommits } from '../trackers/gitTracker.js';
+import { sampleShellHistory } from '../trackers/historyTracker.js';
+
 /**
  * Transforms raw daemon data into the final ducky-report.json structure.
+ * Also performs a final synchronous scan to catch anything the daemon missed.
  */
 
 export function buildReport(session, rawData, endTime) {
@@ -20,10 +24,15 @@ export function buildReport(session, rawData, endTime) {
     };
   }
 
+  // Final synchronous scans to catch events the daemon may have missed
+  // (e.g., commits made after the last 60s polling cycle)
+  const finalGitCommits = mergeCommits(rawData.gitCommits || [], getRecentCommits(session.projectDir, session.startTime));
+  const finalShellHistory = mergeHistory(rawData.shellHistory || [], sampleShellHistory(session.startTime));
+
   const fileActivity = analyzeFileActivity(rawData.fileEvents || []);
   const processActivity = analyzeProcessActivity(rawData.processSnapshots || []);
-  const gitActivity = analyzeGitActivity(rawData.gitCommits || []);
-  const shellHistory = analyzeShellHistory(rawData.shellHistory || []);
+  const gitActivity = analyzeGitActivity(finalGitCommits);
+  const shellHistory = analyzeShellHistory(finalShellHistory);
   const aiArtifacts = analyzeArtifacts(rawData.aiArtifacts || {});
   const networkActivity = analyzeNetwork(rawData.dnsFindings || {}, rawData.networkSnapshots || []);
   const envContext = {
@@ -61,6 +70,17 @@ export function buildReport(session, rawData, endTime) {
       signals,
     },
   };
+}
+
+// ── Merge helpers ─────────────────────────────────────────────────────────────
+function mergeCommits(existing, fresh) {
+  const seen = new Set(existing.map((c) => c.hash));
+  return [...existing, ...fresh.filter((c) => !seen.has(c.hash))];
+}
+
+function mergeHistory(existing, fresh) {
+  const seen = new Set(existing.map((c) => `${c.tool}:${c.command}`));
+  return [...existing, ...fresh.filter((c) => !seen.has(`${c.tool}:${c.command}`))];
 }
 
 // ── File activity ─────────────────────────────────────────────────────────────
