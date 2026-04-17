@@ -5,10 +5,9 @@
  */
 
 import { writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, extname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectDir = process.argv[2];
@@ -21,7 +20,7 @@ if (!projectDir) {
 const DUCKY_DIR = join(homedir(), '.ducky');
 const DATA_FILE = join(DUCKY_DIR, 'data.json');
 
-// ── Dynamic import shim for chokidar (ESM) ──────────────────────────────────
+// ── Dynamic import for chokidar (ESM peer dep) ───────────────────────────────
 let chokidar;
 try {
   chokidar = (await import('chokidar')).default;
@@ -35,12 +34,11 @@ import { getRecentCommits, getGitConfig } from '../trackers/gitTracker.js';
 import { sampleShellHistory } from '../trackers/historyTracker.js';
 import { scanArtifacts } from '../trackers/artifactTracker.js';
 import { checkDNSCache, sampleNetworkConnections } from '../trackers/networkTracker.js';
-import {
-  scanCursorChatHistory,
-  scanClaudeCodeLogs,
-  scanVSCodeCopilotLogs,
-  checkInstalledAIApps,
-} from '../trackers/editorTracker.js';
+import { scanCursorChatHistory, scanClaudeCodeLogs, scanVSCodeCopilotLogs, checkInstalledAIApps } from '../trackers/editorTracker.js';
+import { scanBrowserHistory, getOpenBrowserTabs } from '../trackers/browserTracker.js';
+import { sampleClipboard, getPasteEvents } from '../trackers/clipboardTracker.js';
+import { scanEnvironmentVars, scanEnvFiles, scanShellRcFiles } from '../trackers/envScanner.js';
+import { analyzeFileContent } from '../trackers/codeAnalyzer.js';
 
 // ── Session state ────────────────────────────────────────────────────────────
 const startTime = new Date().toISOString();
@@ -58,6 +56,11 @@ const data = {
   networkSnapshots: [],
   dnsFindings: {},
   editorContext: {},
+  browserHistory: [],
+  openBrowserTabs: [],
+  clipboardPasteEvents: [],
+  envContext: {},
+  codeAnalysis: {},
 };
 
 // ── File tracker ─────────────────────────────────────────────────────────────
@@ -65,24 +68,39 @@ const fileTracker = createFileTracker(projectDir);
 
 if (chokidar) {
   const watcher = chokidar.watch(projectDir, {
-    ignored: [
-      /(^|[/\\])\..+/,         // dot files
-      /node_modules/,
-      /ducky-report\.json/,
-      /__pycache__/,
-      /\.egg-info/,
-    ],
+    ignored: [/(^|[/\\])\..+/, /node_modules/, /ducky-report\.json/, /__pycache__/, /\.egg-info/],
     persistent: true,
     ignoreInitial: false,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     depth: 8,
   });
 
-  watcher.on('add', (p) => { fileTracker.initSizes(p); });
-  watcher.on('change', (p) => fileTracker.onFileEvent('change', p));
+  watcher.on('add', (p) => fileTracker.initSizes(p));
+  watcher.on('change', (p) => {
+    fileTracker.onFileEvent('change', p);
+    // Analyze content of changed code files (debounced via the flush cycle)
+    scheduleCodeAnalysis(p);
+  });
   watcher.on('add', (p) => fileTracker.onFileEvent('add', p));
   watcher.on('unlink', (p) => fileTracker.onFileEvent('unlink', p));
   watcher.on('error', (err) => process.stderr.write(`watcher error: ${err}\n`));
+}
+
+// Track which files need re-analysis (avoid analyzing on every keystroke)
+const pendingAnalysis = new Map();
+function scheduleCodeAnalysis(filePath) {
+  clearTimeout(pendingAnalysis.get(filePath));
+  pendingAnalysis.set(filePath, setTimeout(() => {
+    try {
+      const ext = extname(filePath);
+      const rel = filePath.replace(projectDir + '/', '');
+      const analysis = analyzeFileContent(filePath, ext);
+      if (analysis && analysis.aiContentScore > 0) {
+        data.codeAnalysis[rel] = analysis;
+      }
+    } catch {}
+    pendingAnalysis.delete(filePath);
+  }, 2000));
 }
 
 // ── Initial static scans ─────────────────────────────────────────────────────
@@ -96,6 +114,13 @@ data.editorContext = {
   vscodeCopilotLogs: scanVSCodeCopilotLogs(),
   installedAIApps: checkInstalledAIApps(),
 };
+data.envContext = {
+  envVars: scanEnvironmentVars(),
+  envFiles: scanEnvFiles(projectDir),
+  shellRcKeys: scanShellRcFiles(),
+};
+data.browserHistory = scanBrowserHistory(startTime);
+data.openBrowserTabs = getOpenBrowserTabs();
 
 // ── Polling intervals ────────────────────────────────────────────────────────
 const intervals = [];
@@ -103,16 +128,13 @@ const intervals = [];
 // Process snapshot every 15 seconds
 intervals.push(setInterval(() => {
   const snap = sampleProcesses();
-  if (snap.aiProcesses.length > 0) {
-    data.processSnapshots.push(snap);
-  }
+  if (snap.aiProcesses.length > 0) data.processSnapshots.push(snap);
 }, 15_000));
 
 // Git commits every 60 seconds
 intervals.push(setInterval(() => {
   try {
     const commits = getRecentCommits(projectDir, startTime);
-    // Merge, avoid duplicates by hash
     const existingHashes = new Set(data.gitCommits.map((c) => c.hash));
     for (const c of commits) {
       if (!existingHashes.has(c.hash)) {
@@ -127,7 +149,6 @@ intervals.push(setInterval(() => {
 intervals.push(setInterval(() => {
   try {
     const cmds = sampleShellHistory(startTime);
-    // Merge, deduplicate by command+tool
     const existingKeys = new Set(data.shellHistory.map((c) => `${c.tool}:${c.command}`));
     for (const c of cmds) {
       const key = `${c.tool}:${c.command}`;
@@ -141,12 +162,10 @@ intervals.push(setInterval(() => {
 
 // Re-scan artifacts every 2 minutes
 intervals.push(setInterval(() => {
-  try {
-    data.aiArtifacts = scanArtifacts(projectDir);
-  } catch {}
+  try { data.aiArtifacts = scanArtifacts(projectDir); } catch {}
 }, 120_000));
 
-// DNS cache + active connections every 45 seconds
+// DNS + active connections every 45 seconds
 intervals.push(setInterval(() => {
   try {
     const dns = checkDNSCache();
@@ -156,10 +175,30 @@ intervals.push(setInterval(() => {
   } catch {}
 }, 45_000));
 
-// Persist data every 5 seconds
+// Browser history every 90 seconds (SQLite copy is slow)
 intervals.push(setInterval(() => {
-  flush();
+  try {
+    const fresh = scanBrowserHistory(startTime);
+    const existingUrls = new Set(data.browserHistory.map((b) => b.url));
+    for (const b of fresh) {
+      if (!existingUrls.has(b.url)) {
+        data.browserHistory.push(b);
+        existingUrls.add(b.url);
+      }
+    }
+    data.openBrowserTabs = getOpenBrowserTabs();
+  } catch {}
+}, 90_000));
+
+// Clipboard every 5 seconds
+intervals.push(setInterval(() => {
+  try {
+    sampleClipboard();
+  } catch {}
 }, 5_000));
+
+// Persist data every 5 seconds
+intervals.push(setInterval(() => { flush(); }, 5_000));
 
 // Initial samples
 setTimeout(() => {
@@ -174,6 +213,7 @@ function flush() {
   try {
     mkdirSync(DUCKY_DIR, { recursive: true });
     data.fileEvents = fileTracker.getEvents();
+    data.clipboardPasteEvents = getPasteEvents();
     writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   } catch (e) {
     process.stderr.write(`daemon flush error: ${e.message}\n`);
