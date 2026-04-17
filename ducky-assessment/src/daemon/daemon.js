@@ -34,6 +34,7 @@ import { sampleProcesses, getInstalledAITools } from '../trackers/processTracker
 import { getRecentCommits, getGitConfig } from '../trackers/gitTracker.js';
 import { sampleShellHistory } from '../trackers/historyTracker.js';
 import { scanArtifacts } from '../trackers/artifactTracker.js';
+import { checkDNSCache, sampleNetworkConnections } from '../trackers/networkTracker.js';
 
 // ── Session state ────────────────────────────────────────────────────────────
 const startTime = new Date().toISOString();
@@ -48,6 +49,8 @@ const data = {
   installedTools: {},
   gitConfig: {},
   fileEvents: [],
+  networkSnapshots: [],
+  dnsFindings: {},
 };
 
 // ── File tracker ─────────────────────────────────────────────────────────────
@@ -79,6 +82,7 @@ if (chokidar) {
 data.installedTools = getInstalledAITools();
 data.aiArtifacts = scanArtifacts(projectDir);
 data.gitConfig = getGitConfig(projectDir);
+data.dnsFindings = checkDNSCache();
 
 // ── Polling intervals ────────────────────────────────────────────────────────
 const intervals = [];
@@ -128,6 +132,16 @@ intervals.push(setInterval(() => {
     data.aiArtifacts = scanArtifacts(projectDir);
   } catch {}
 }, 120_000));
+
+// DNS cache + active connections every 45 seconds
+intervals.push(setInterval(() => {
+  try {
+    const dns = checkDNSCache();
+    data.dnsFindings = { ...data.dnsFindings, ...dns };
+    const conns = sampleNetworkConnections();
+    if (conns.length > 0) data.networkSnapshots.push(...conns);
+  } catch {}
+}, 45_000));
 
 // Persist data every 5 seconds
 intervals.push(setInterval(() => {

@@ -25,6 +25,7 @@ export function buildReport(session, rawData, endTime) {
   const gitActivity = analyzeGitActivity(rawData.gitCommits || []);
   const shellHistory = analyzeShellHistory(rawData.shellHistory || []);
   const aiArtifacts = analyzeArtifacts(rawData.aiArtifacts || {});
+  const networkActivity = analyzeNetwork(rawData.dnsFindings || {}, rawData.networkSnapshots || []);
   const envContext = {
     installedTools: rawData.installedTools || {},
     gitConfig: rawData.gitConfig || {},
@@ -36,6 +37,7 @@ export function buildReport(session, rawData, endTime) {
     gitActivity,
     shellHistory,
     aiArtifacts,
+    networkActivity,
   });
 
   return {
@@ -53,6 +55,7 @@ export function buildReport(session, rawData, endTime) {
       gitActivity,
       shellHistory,
       aiArtifacts,
+      networkActivity,
       envContext,
       signals,
     },
@@ -210,6 +213,16 @@ function analyzeShellHistory(commands) {
   };
 }
 
+// ── Network activity ──────────────────────────────────────────────────────────
+function analyzeNetwork(dnsFindings, networkSnapshots) {
+  const toolsViaNetwork = Object.keys(dnsFindings);
+  return {
+    aiDomainsResolved: dnsFindings,
+    activeConnectionSnapshots: networkSnapshots.slice(0, 50),
+    toolsViaNetwork,
+  };
+}
+
 // ── Artifacts ─────────────────────────────────────────────────────────────────
 function analyzeArtifacts(artifacts) {
   const found = artifacts;
@@ -223,7 +236,7 @@ function analyzeArtifacts(artifacts) {
 }
 
 // ── Signal scoring ────────────────────────────────────────────────────────────
-function computeSignals({ fileActivity, processActivity, gitActivity, shellHistory, aiArtifacts }) {
+function computeSignals({ fileActivity, processActivity, gitActivity, shellHistory, aiArtifacts, networkActivity }) {
   const evidence = [];
   let score = 0;
 
@@ -267,6 +280,13 @@ function computeSignals({ fileActivity, processActivity, gitActivity, shellHisto
     evidence.push({ signal: 'Commits with AI-like characteristics', count: gitActivity.likelyAICommits, weight: 0.1 });
   }
 
+  // Network signals
+  const networkTools = networkActivity?.toolsViaNetwork ?? [];
+  if (networkTools.length > 0) {
+    score += 0.15;
+    evidence.push({ signal: 'AI API domains resolved via DNS', tools: networkTools, weight: 0.15 });
+  }
+
   score = Math.min(score, 1.0);
 
   // Determine primary tool
@@ -274,6 +294,7 @@ function computeSignals({ fileActivity, processActivity, gitActivity, shellHisto
     ...activeTools,
     ...artifactTools,
     ...shellHistory.uniqueToolsInvoked,
+    ...networkTools,
   ];
   const toolCounts = {};
   for (const t of allTools) toolCounts[t] = (toolCounts[t] || 0) + 1;
