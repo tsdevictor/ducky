@@ -75,13 +75,17 @@ if (chokidar) {
     depth: 8,
   });
 
-  watcher.on('add', (p) => fileTracker.initSizes(p));
+  let watcherReady = false;
+
+  watcher.on('add', (p) => {
+    fileTracker.initSizes(p);
+    if (watcherReady) fileTracker.onFileEvent('add', p);
+  });
+  watcher.on('ready', () => { watcherReady = true; });
   watcher.on('change', (p) => {
     fileTracker.onFileEvent('change', p);
-    // Analyze content of changed code files (debounced via the flush cycle)
     scheduleCodeAnalysis(p);
   });
-  watcher.on('add', (p) => fileTracker.onFileEvent('add', p));
   watcher.on('unlink', (p) => fileTracker.onFileEvent('unlink', p));
   watcher.on('error', (err) => process.stderr.write(`watcher error: ${err}\n`));
 }
